@@ -76,6 +76,12 @@ impl<'pcx> PatternItem<'pcx> {
             PatternItem::RPLPatternOperation(op) => op.attr.diag,
         }
     }
+    pub fn should_deduplicate(&self) -> bool {
+        match self {
+            PatternItem::RustItems(items) => items.attr.should_deduplicate(),
+            PatternItem::RPLPatternOperation(op) => op.attr.should_deduplicate(),
+        }
+    }
     pub(crate) fn consts(&self) -> &FxHashMap<Symbol, &'pcx str> {
         match self {
             PatternItem::RustItems(items) => &items.attr.consts,
@@ -100,7 +106,7 @@ impl<'pcx> PatternItem<'pcx> {
         match self {
             PatternItem::RustItems(items) => {
                 let mut map = FxHashMap::default();
-                for fn_pat in &items.fns {
+                for fn_pat in &items.fns.all_fns {
                     if let Some(body) = fn_pat.body {
                         map.extend(body.labels.iter().map(|(&k, &v)| (k, v)));
                     }
