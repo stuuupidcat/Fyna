@@ -176,8 +176,12 @@ pub fn matches_with<'a, 'pcx, 'tcx>(cx: &'a CheckMirCtxt<'a, 'pcx, 'tcx>, on_mat
     matching.do_match();
 }
 
-/// Ty metavars mentioned in a fn MIR body (locals / statements), excluding AdtPat field decls.
-fn collect_used_ty_vars(mir_pat: &pat::FnPatternBody<'_>) -> FxHashSet<pat::TyVarIdx> {
+/// Ty metavars mentioned in a fn pattern's signature or MIR body.
+///
+/// Includes param/return types so metavars that appear only on the signature (e.g. `-> &mut $U`
+/// with no `RET` local) are not cleared. Still excludes AdtPat field decls (visit of `AdtPat`
+/// does not walk field types), so unused ADT field seeds do not invent spurious solutions.
+fn collect_used_ty_vars(fn_pat: &pat::FnPattern<'_>) -> FxHashSet<pat::TyVarIdx> {
     use pat::visitor::PatternVisitor;
 
     struct Collect {
@@ -193,11 +197,27 @@ fn collect_used_ty_vars(mir_pat: &pat::FnPatternBody<'_>) -> FxHashSet<pat::TyVa
     let mut collect = Collect {
         vars: FxHashSet::default(),
     };
-    for &ty in &mir_pat.locals {
-        collect.visit_ty(ty);
+    for param in fn_pat.params.iter() {
+        collect.visit_ty(param.ty);
     }
-    for (bb, block) in mir_pat.basic_blocks.iter_enumerated() {
-        collect.visit_basic_block_data(bb, block);
+    if let Some(ret) = fn_pat.ret {
+        collect.visit_ty(ret);
+    }
+    // Place/const metavar types (e.g. `$src: place($T)`) are not always mirrored as MIR
+    // locals; still count them so matching does not clear `$T` and fall back to `!`.
+    for place_var in fn_pat.meta.place_vars.iter() {
+        collect.visit_ty(place_var.ty);
+    }
+    for const_var in fn_pat.meta.const_vars.iter() {
+        collect.visit_ty(const_var.ty);
+    }
+    if let Some(mir_pat) = fn_pat.body {
+        for &ty in &mir_pat.locals {
+            collect.visit_ty(ty);
+        }
+        for (bb, block) in mir_pat.basic_blocks.iter_enumerated() {
+            collect.visit_basic_block_data(bb, block);
+        }
     }
     collect.vars
 }
@@ -560,9 +580,9 @@ impl<'a, 'pcx, 'tcx> MatchCtxt<'a, 'pcx, 'tcx> {
         for (candidates, matches) in core::iter::zip(&self.cx.ty.ty_vars, &mut self.matching.ty_vars) {
             matches.candidates = std::mem::take(&mut *candidates.borrow_mut());
         }
-        // Drop candidates for ty metavars never mentioned in this fn MIR body.
+        // Drop candidates for ty metavars never mentioned in this fn signature/MIR body.
         // Otherwise unused Adt field types (e.g. `$second: $U`) invent spurious solutions.
-        let used_ty_vars = collect_used_ty_vars(self.cx.mir_pat);
+        let used_ty_vars = collect_used_ty_vars(self.cx.fn_pat);
         for (idx, matches) in self.matching.ty_vars.iter_enumerated_mut() {
             if !used_ty_vars.contains(&idx) {
                 matches.candidates.clear();

@@ -239,6 +239,22 @@ impl<'pcx> FnPattern<'pcx> {
             self.params.len() == body.arg_count
         }) && self.constraints.attrs.filter(tcx, def_id, header)
     }
+
+    /// Filter for signature-only slots when MIR is unavailable (e.g. foreign `extern` fns).
+    pub fn filter_signature_only(
+        &self,
+        tcx: TyCtxt<'_>,
+        def_id: LocalDefId,
+        header: Option<FnHeader>,
+    ) -> bool {
+        let arity = tcx.fn_sig(def_id.to_def_id()).skip_binder().inputs().skip_binder().len();
+        (if self.params.non_exhaustive {
+            self.params.len() <= arity
+        } else {
+            self.params.len() == arity
+        }) && self.constraints.attrs.filter(tcx, def_id, header)
+    }
+
     /// Returns the extra spans for this function pattern.
     #[instrument(level = "trace", skip(self, tcx), fields(self = ?self.name), ret)]
     pub fn extra_span<'tcx>(&self, tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<ExtraSpan<'tcx>> {
@@ -335,10 +351,20 @@ impl<'pcx> FnPattern<'pcx> {
     }
 
     /// Returns true when the pattern has no MIR statements to match (signature-only).
+    ///
+    /// Named parameters synthesize `Assign(_, Rvalue::Any)` local inits so they can match MIR
+    /// arguments; those alone do not count as a MIR body for this check.
     pub fn is_signature_only(&self) -> bool {
         self.body.is_none_or(|body| {
             body.basic_blocks.iter().all(|bb| {
-                bb.statements.is_empty()
+                let stmts_sig_only = bb.statements.iter().all(|stmt| {
+                    matches!(
+                        stmt,
+                        super::mir::StatementKind::Assign(place, super::mir::Rvalue::Any)
+                            if place.as_local().is_some_and(|local| body.params_idx.contains(&local))
+                    )
+                });
+                stmts_sig_only
                     && matches!(
                         bb.terminator,
                         Some(super::mir::TerminatorKind::Return) | Some(super::mir::TerminatorKind::PatEnd)

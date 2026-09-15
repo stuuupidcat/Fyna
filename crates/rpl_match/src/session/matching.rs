@@ -207,8 +207,16 @@ impl<'a, 'pcx, 'tcx> SessionMatching<'a, 'pcx, 'tcx> {
                 if !self.fn_item_in_domain(*desc, item) {
                     continue;
                 }
-                let body = self.collect.tcx.optimized_mir(item.def_id);
-                if !desc.fn_pat.filter(self.collect.tcx, item.def_id, item.header, body) {
+                let mir_available = self.collect.tcx.is_mir_available(item.def_id);
+                if !mir_available && !desc.fn_pat.is_signature_only() {
+                    continue;
+                }
+                if mir_available {
+                    let body = self.collect.tcx.optimized_mir(item.def_id);
+                    if !desc.fn_pat.filter(self.collect.tcx, item.def_id, item.header, body) {
+                        continue;
+                    }
+                } else if !desc.fn_pat.filter_signature_only(self.collect.tcx, item.def_id, item.header) {
                     continue;
                 }
                 if desc.fn_pat.extra_span(self.collect.tcx, item.def_id).is_none() {

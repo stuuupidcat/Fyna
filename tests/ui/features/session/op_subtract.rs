@@ -2,8 +2,10 @@
 //@check-pass
 //@compile-flags: -Z inline-mir=false
 //
-// Expected: no diagnostic. Both util patterns match this function with the same `$T`;
-// `wide - narrow` must subtract on SharedEnv + DefId, not NormalizedMatched equality.
+// Expected: no diagnostic. Both util patterns match this function with the same `$T`
+// and the same labeled `'use` site, so `wide - narrow` subtracts under
+// SharedEnv + DefId + NormalizedMatched (label sites). Narrow's extra unlabeled
+// `$z` local is not part of NormalizedMatched, so it does not block subtraction.
 
 #![allow(dead_code)]
 

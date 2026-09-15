@@ -15,7 +15,7 @@ util {
         }
     }
 
-    // Same function, extra statement — NormalizedMatched would differ from `wide`.
+    // Same function, extra unlabeled local. Label sites still align with `wide`.
     narrow[$T: type] = {
         fn $f(..) -> _ {
             let $x: $T = _;

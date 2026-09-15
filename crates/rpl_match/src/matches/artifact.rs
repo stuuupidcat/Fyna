@@ -165,6 +165,14 @@ impl<'tcx> NormalizedMatched<'tcx> {
                 .all(|((label1, _), (label2, _))| label1 == label2)
     }
 
+    /// Same label → MIR location/local/span mapping (ignores ty/const/place metavars).
+    ///
+    /// Used by `#[deduplicate]` so concrete types from signature-only slots (e.g. `$T = f32`
+    /// vs `f64` from `$isnan`) do not keep duplicate reports of the same MIR sites.
+    pub fn same_lint_sites(&self, other: &Self) -> bool {
+        self.extra == other.extra
+    }
+
     /// Look up a normalized label by name.
     pub fn spanned(&self, name: &str) -> Option<NormalizedSpanned> {
         let labels = &self.extra;

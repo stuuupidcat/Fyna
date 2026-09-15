@@ -133,6 +133,7 @@ struct PendingLint<'pcx, 'tcx> {
     pattern: &'pcx rpl_context::pat::Pattern<'pcx>,
     pat_name: Symbol,
     pat_idx: usize,
+    deduplicate: bool,
     owned: OwnedLintMatch<'tcx>,
 }
 
@@ -161,6 +162,7 @@ impl<'tcx, 'pcx> CheckFnCtxt<'pcx, 'tcx> {
                             pattern,
                             pat_name,
                             pat_idx,
+                            deduplicate: pat_item.should_deduplicate(),
                             owned: target.owned,
                         });
                     }
@@ -185,7 +187,13 @@ impl<'tcx, 'pcx> CheckFnCtxt<'pcx, 'tcx> {
                     *pat == lint.pat_name
                         && *def == lint.owned.def_id
                         && *slot == lint.owned.primary_slot
-                        && normalized == &lint.owned.normalized
+                        && if lint.deduplicate {
+                            // `#[deduplicate]`: same MIR label sites, ignore ty_var forks.
+                            normalized.same_lint_sites(&lint.owned.normalized)
+                        } else {
+                            // Keep distinct SharedEnv instantiations (diag may print `{$T}`).
+                            normalized == &lint.owned.normalized
+                        }
                 }) && {
                     seen.push((
                         lint.pat_name,

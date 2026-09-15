@@ -60,6 +60,10 @@ impl<'a, 'pcx, 'tcx> MatchCollectCtxt<'a, 'pcx, 'tcx> {
             return;
         }
 
+        if !self.tcx.is_mir_available(item.def_id) {
+            return;
+        }
+
         let body = self.body(item.def_id);
         let (mir_cfg, mir_ddg) = self.graphs(body);
         let self_ty = self.self_ty(item.def_id);
@@ -112,22 +116,48 @@ impl<'a, 'pcx, 'tcx> MatchCollectCtxt<'a, 'pcx, 'tcx> {
         item: CrateFnItem,
         attr_map: rpl_constraints::attributes::ExtraSpan<'tcx>,
     ) -> Option<FnSlotCandidate<'tcx>> {
-        let body = self.body(item.def_id);
-        let typing_env = ty::TypingEnv::post_analysis(self.tcx, item.def_id.to_def_id());
-        let self_ty = self.self_ty(item.def_id);
+        let def_id = item.def_id;
+        let mir_available = self.tcx.is_mir_available(def_id);
+        // Foreign/`extern` fns have no MIR; signature matching must not require a body.
+        if !mir_available && !fn_pat.constraints.preds.is_empty() {
+            return None;
+        }
+        let typing_env = ty::TypingEnv::post_analysis(self.tcx, def_id.to_def_id());
+        let self_ty = self.self_ty(def_id);
         let cx = crate::MatchFnCtxt::with_typing_env(self.tcx, self.pcx, rust_items, fn_pat, typing_env, self_ty);
         seed_from_env(cx.ty(), env);
-        if !cx.match_fn(item.def_id.to_def_id()) {
+        if !cx.match_fn(def_id.to_def_id()) {
             return None;
         }
         let adt_defs = crate::collect_adt_def_bindings(cx.ty())?;
         let ty_vars = project_unique_ty_vars(cx.ty())?;
         let const_vars = project_unique_const_vars(cx.ty())?;
         let meta = rust_items.meta.as_ref();
-        let labels = &fn_pat.expect_body().labels;
+        let mir_pat = fn_pat.expect_body();
+        let labels = &mir_pat.labels;
+        let mut locals = rustc_index::IndexVec::from_elem_n(mir::Local::from_u32(0), mir_pat.locals.len());
+        if mir_available {
+            let body = self.body(def_id);
+            if let Some(ret) = mir_pat.return_idx {
+                locals[ret] = mir::RETURN_PLACE;
+            }
+            let mut args = body.args_iter();
+            if let Some(self_local) = mir_pat.self_idx {
+                if let Some(arg) = args.next() {
+                    locals[self_local] = arg;
+                }
+            }
+            for (local, _) in mir_pat.locals.iter_enumerated() {
+                if mir_pat.params_idx.contains(&local)
+                    && let Some(arg) = args.next()
+                {
+                    locals[local] = arg;
+                }
+            }
+        }
         let matched = crate::matches::Matched {
             basic_blocks: Default::default(),
-            locals: Default::default(),
+            locals,
             ty_vars,
             const_vars,
             place_vars: rustc_index::IndexVec::from_fn_n(
@@ -139,21 +169,30 @@ impl<'a, 'pcx, 'tcx> MatchCollectCtxt<'a, 'pcx, 'tcx> {
             ),
             adt_fields: Default::default(),
         };
-        if !self.check_constraints(
-            fn_pat,
-            item.def_id,
-            body,
-            &matched,
-            env,
+        if mir_available {
+            let body = self.body(def_id);
+            if !self.check_constraints(
+                fn_pat,
+                def_id,
+                body,
+                &matched,
+                env,
+                &fn_pat.constraints,
+                None,
+                None,
+            ) {
+                return None;
+            }
+        } else if mentioned_meta_unbound(
             &fn_pat.constraints,
-            None,
-            None,
+            fn_pat.symbol_table,
+            &overlay_matched(&matched, env),
         ) {
             return None;
         }
         let normalized = NormalizedMatched::new(&matched, labels, &attr_map);
         Some(FnSlotCandidate {
-            def_id: item.def_id,
+            def_id,
             snapshot: BindingSnapshot::from_normalized_with_adt_defs(&normalized, adt_defs),
             normalized,
             matched,
@@ -297,12 +336,18 @@ fn mentioned_meta_unbound(
         match meta {
             Some(MetaVariable::Type(idx, _)) => {
                 let ty_idx = pat::TyVarIdx::from_usize(idx);
-                if MetaBindings::should_skip_ty_binding(matched.ty_vars[ty_idx]) {
+                // `Never` is the empty-candidate sentinel from `project_unique_ty_vars`.
+                // `Param` is a real binding (generic MIR) and must be allowed in predicates
+                // such as `maybe_misaligned($T, $alignment)` — do not reuse
+                // `should_skip_ty_binding`, which also skips `Param` for SharedEnv merge.
+                if matches!(matched.ty_vars[ty_idx].kind(), ty::TyKind::Never) {
                     return true;
                 }
             },
             Some(MetaVariable::Const(idx, _, _)) => {
                 let const_idx = pat::ConstVarIdx::from_usize(idx);
+                // Only `Const::Param` placeholders are "unbound" for SharedEnv; MIR
+                // `Const::MIR` values are concrete even when unevaluable.
                 if MetaBindings::should_skip_const_binding(matched.const_vars[const_idx]) {
                     return true;
                 }

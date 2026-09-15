@@ -153,10 +153,11 @@ impl<'tcx> SessionResult<'tcx> {
         self.primary_fn_candidate().is_some()
     }
 
-    /// Negative filter for `p - q`: mapped SharedEnv plus alignable slot DefIds.
+    /// Negative filter for `p - q`: mapped SharedEnv, alignable slot DefIds, and
+    /// [`NormalizedMatched`] on Fn slots present on both sides.
     ///
-    /// Does **not** compare [`NormalizedMatched`] (MIR locations). Slots present on only
-    /// one side (e.g. a single-fn negative vs a multi-fn positive) are ignored.
+    /// Slots present on only one side (e.g. a single-fn negative vs a multi-fn positive)
+    /// are ignored for alignment, matching the multi-instance contract.
     pub fn subtracted_by(&self, neg: &Self) -> bool {
         let Some(pos_primary) = self.primary_fn_candidate() else {
             return false;
@@ -175,6 +176,12 @@ impl<'tcx> SessionResult<'tcx> {
                 continue;
             };
             if assignment_def_id(a) != assignment_def_id(neg_a) {
+                return false;
+            }
+            // Different MIR subgraphs must not subtract each other.
+            if let (SlotCandidate::Fn(pos_fn), SlotCandidate::Fn(neg_fn)) = (&a.candidate, &neg_a.candidate)
+                && pos_fn.normalized != neg_fn.normalized
+            {
                 return false;
             }
         }
@@ -300,9 +307,8 @@ impl CrateItemIndex {
                 _span: rustc_span::Span,
                 def_id: LocalDefId,
             ) -> Self::Result {
-                if !self.tcx.is_mir_available(def_id) {
-                    return rustc_hir::intravisit::walk_fn(self, kind, decl, _body_id, def_id);
-                }
+                // Index even when MIR is unavailable (e.g. some foreign/ABI cases) so
+                // signature-only slots can still match. MIR matching skips these later.
                 let (fn_name, header) = match kind {
                     rustc_hir::intravisit::FnKind::ItemFn(name, _, fn_header) => (Some(name.name), Some(fn_header)),
                     rustc_hir::intravisit::FnKind::Method(name, fn_sig) => (Some(name.name), Some(fn_sig.header)),
@@ -315,6 +321,19 @@ impl CrateItemIndex {
                     fn_name,
                 });
                 rustc_hir::intravisit::walk_fn(self, kind, decl, _body_id, def_id)
+            }
+
+            fn visit_foreign_item(&mut self, item: &'tcx rustc_hir::ForeignItem<'tcx>) -> Self::Result {
+                if let rustc_hir::ForeignItemKind::Fn(sig, ..) = item.kind {
+                    let def_id = item.owner_id.def_id;
+                    self.index.fns.push(CrateFnItem {
+                        def_id,
+                        header: None,
+                        has_self: sig.decl.implicit_self.has_implicit_self(),
+                        fn_name: Some(item.ident.name),
+                    });
+                }
+                rustc_hir::intravisit::walk_foreign_item(self, item)
             }
         }
 

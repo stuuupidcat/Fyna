@@ -145,13 +145,18 @@ impl SessionResult<'_> {
         }
     }
 
-    /// Slot → DefId assignment key (order-sensitive by slot identity, not DefId set).
-    fn slot_def_signature(&self) -> Vec<(MatchSlot, rustc_hir::def_id::LocalDefId)> {
+    /// Slot → DefId for MIR-body Fn slots and ADT slots.
+    ///
+    /// Signature-only Fn slots (empty `basic_blocks`, e.g. `fn $isnan(_: $T) -> bool;`) are
+    /// omitted so `#[deduplicate]` can collapse f32/f64 `$isnan` pairings of the same MIR hit.
+    /// `$f1`/`$f2` swaps still differ because both are MIR-body slots.
+    fn mir_slot_def_signature(&self) -> Vec<(MatchSlot, rustc_hir::def_id::LocalDefId)> {
         let mut sig: Vec<_> = self
             .assignments
             .iter()
             .filter_map(|a| match &a.candidate {
-                SlotCandidate::Fn(c) => Some((a.slot, c.def_id)),
+                SlotCandidate::Fn(c) if !c.matched.basic_blocks.is_empty() => Some((a.slot, c.def_id)),
+                SlotCandidate::Fn(_) => None,
                 SlotCandidate::Adt(c) => Some((a.slot, c.def_id)),
             })
             .collect();
@@ -160,6 +165,34 @@ impl SessionResult<'_> {
     }
 
     pub fn equivalent(&self, other: &Self) -> bool {
-        self.slot_def_signature() == other.slot_def_signature() && self.bindings.equivalent_to(&other.bindings)
+        // MIR-body (+ ADT) DefIds only: signature-only slots (e.g. `$isnan`) may differ
+        // without meaning a distinct lint. Still require SharedEnv so diag metavars like
+        // `{$T}` keep distinct instantiations.
+        if self.mir_slot_def_signature() != other.mir_slot_def_signature()
+            || !self.bindings.equivalent_to(&other.bindings)
+        {
+            return false;
+        }
+        for a in &self.assignments {
+            let SlotCandidate::Fn(pos) = &a.candidate else {
+                continue;
+            };
+            if pos.matched.basic_blocks.is_empty() {
+                continue;
+            }
+            let Some(SlotCandidate::Fn(neg)) = other
+                .assignments
+                .iter()
+                .find(|b| b.slot == a.slot)
+                .map(|b| &b.candidate)
+            else {
+                return false;
+            };
+            // Label sites (ignore ty_vars noise on NormalizedMatched).
+            if !pos.normalized.same_lint_sites(&neg.normalized) {
+                return false;
+            }
+        }
+        true
     }
 }
