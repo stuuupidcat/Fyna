@@ -171,16 +171,7 @@ impl<'a, 'pcx, 'tcx> MatchCollectCtxt<'a, 'pcx, 'tcx> {
         };
         if mir_available {
             let body = self.body(def_id);
-            if !self.check_constraints(
-                fn_pat,
-                def_id,
-                body,
-                &matched,
-                env,
-                &fn_pat.constraints,
-                None,
-                None,
-            ) {
+            if !self.check_constraints(fn_pat, def_id, body, &matched, env, &fn_pat.constraints, None, None) {
                 return None;
             }
         } else if mentioned_meta_unbound(

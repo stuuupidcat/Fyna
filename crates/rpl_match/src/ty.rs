@@ -145,9 +145,7 @@ impl<'pcx, 'tcx> MatchTy<'pcx, 'tcx> for MatchTyCtxt<'pcx, 'tcx> {
             // SharedEnv may pin a concrete type from a signature slot (e.g. `$T = f64`
             // from `$isnan`), while MIR of a generic method still sees `T`. Treat a
             // type parameter as standing for the pinned concrete type.
-            if pinned.is_some_and(|p| !matches!(p.kind(), ty::Param(_)))
-                && matches!(ty.kind(), ty::Param(_))
-            {
+            if pinned.is_some_and(|p| !matches!(p.kind(), ty::Param(_))) && matches!(ty.kind(), ty::Param(_)) {
                 return true;
             }
             return false;

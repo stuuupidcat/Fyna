@@ -241,13 +241,13 @@ impl<'pcx> FnPattern<'pcx> {
     }
 
     /// Filter for signature-only slots when MIR is unavailable (e.g. foreign `extern` fns).
-    pub fn filter_signature_only(
-        &self,
-        tcx: TyCtxt<'_>,
-        def_id: LocalDefId,
-        header: Option<FnHeader>,
-    ) -> bool {
-        let arity = tcx.fn_sig(def_id.to_def_id()).skip_binder().inputs().skip_binder().len();
+    pub fn filter_signature_only(&self, tcx: TyCtxt<'_>, def_id: LocalDefId, header: Option<FnHeader>) -> bool {
+        let arity = tcx
+            .fn_sig(def_id.to_def_id())
+            .skip_binder()
+            .inputs()
+            .skip_binder()
+            .len();
         (if self.params.non_exhaustive {
             self.params.len() <= arity
         } else {

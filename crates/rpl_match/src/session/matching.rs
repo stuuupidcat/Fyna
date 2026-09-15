@@ -216,7 +216,10 @@ impl<'a, 'pcx, 'tcx> SessionMatching<'a, 'pcx, 'tcx> {
                     if !desc.fn_pat.filter(self.collect.tcx, item.def_id, item.header, body) {
                         continue;
                     }
-                } else if !desc.fn_pat.filter_signature_only(self.collect.tcx, item.def_id, item.header) {
+                } else if !desc
+                    .fn_pat
+                    .filter_signature_only(self.collect.tcx, item.def_id, item.header)
+                {
                     continue;
                 }
                 if desc.fn_pat.extra_span(self.collect.tcx, item.def_id).is_none() {
